@@ -1,0 +1,23 @@
+# requirements-streamlit.txt
+# Deps mínimas para rodar o frontend Streamlit do ChatFGV.
+
+# Frontend
+streamlit
+
+# DHBB / RAG
+sentence-transformers
+faiss-cpu
+langchain-community
+langchain-text-splitters
+PyYAML
+
+# Dados estruturados (PostgreSQL)
+sqlalchemy
+psycopg2-binary
+
+# Ambiente (.env)
+python-dotenv
+
+# Opcional: exibição de resultados SQL
+pandas
+pytz
