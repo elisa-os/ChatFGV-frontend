@@ -249,7 +249,7 @@ def _adapt_extras(
                 extras["sql_result"] = df
         except Exception:
             pass
-    return msg, extras
+    return extras
 
 
 # ==================================================================
