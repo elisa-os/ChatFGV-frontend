@@ -21,11 +21,17 @@ Variaveis de ambiente relevantes:
 - CHATFGV_PG_DSN      : DSN do Postgres (se quiser banco real)
 - CHATFGV_SQL_MOCK    : "1" para usar banco mock
 - CHATFGV_LOG_PATH    : caminho do arquivo de log a monitorar
+
+MODIFICACOES RECENTES:
+- top_k padrao aumentado de 3 para 10 (init_state)
+- response_generator agora mostra todos os documentos recuperados (nao só os 5 primeiros)
+- sidebar_config removido (barra lateral não mais exibida)
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from typing import Any, Dict, List, Optional
@@ -60,6 +66,7 @@ from log_panel import log_panel
 # CONFIGURACAO E ESTADO
 # ==================================================================
 
+
 def init_state() -> None:
     state = st.session_state
     if "messages" not in state:
@@ -84,15 +91,16 @@ def init_state() -> None:
     if "config" not in state:
         state.config = {
             "modo": "Auto",
-            "top_k": 3,
+            "top_k": 10,
             "sql_mock": True,
             "show_context": True,
         }
 
 
 # ==================================================================
-# GERADOR DE RESPOSTA (placeholder)
+# GERADOR DE RESPOSTA
 # ==================================================================
+
 
 def response_generator(
     usuario: str,
@@ -101,33 +109,47 @@ def response_generator(
     sql_query: Optional[str] = None,
     sql_result: Optional[Any] = None,
 ) -> str:
+    """
+    Gera a resposta formatada a partir do contexto recuperado e fontes.
+
+    Mostra apenas os 3 primeiros documentos recuperados (com fonte e snippet),
+    igual ao formato original. Usa _dividir_documentos para mapear fontes.
+    """
     partes = [f"Pergunta: {usuario}"]
 
     if contexto.strip():
-        linhas = [p for p in contexto.split("\n") if p.strip()]
-        if linhas:
-            partes.append("\nContexto recuperado (resumo):")
-            for p in linhas[:3]:
-                partes.append("- " + p[:3000])
-            if len(linhas) > 3:
-                partes.append(
-                    f"... ({len(linhas)} verbetes recuperados no total)"
-                )
-        else:
-            partes.append("Contexto recuperado: (nenhum verrete encontrado)")
+        partes.append("\nContexto recuperado (resumo):")
+        # Dividir o contexto em documentos individuais (com fontes)
+        documentos = _dividir_documentos(contexto, fontes)
+        # Mostrar só os 3 primeiros, igual ao formato original
+        for i, doc_info in enumerate(documentos[:3]):
+            numero = i + 1
+            fonte = doc_info.get("fonte", f"documento {numero}")
+            snippet = doc_info.get("conteudo", "")
+            partes.append(f"- [{numero}] ({fonte}) {snippet[:350].replace(chr(10), ' ')}")
+        if len(documentos) > 3:
+            partes.append(
+                f"... e mais {len(documentos) - 3} documentos recuperados"
+            )
+    else:
+        partes.append("Contexto recuperado: (nenhum verrete encontrado)")
 
     if fontes:
-        partes.append("\nFontes DHBB: " + ", ".join(fontes))
+        total = len(fontes) if fontes else 0
+        if total > 0:
+            partes.append(f"\nFontes DHBB ({total} documentos recuperados): " + ", ".join(fontes))
+        else:
+            partes.append("\nFontes DHBB: (nenhuma)")
 
     if sql_query:
         partes.append(f"\nQuery SQL gerada:\n{sql_query}")
     if sql_result is not None:
         if isinstance(sql_result, list):
             partes.append(
-                "\nResultado da query (preview): " + f"{len(sql_result)} linhas"
+                f"\nResultado da query (preview): {len(sql_result)} linhas"
             )
         else:
-            partes.append("\nResultado da query (preview): " + str(sql_result))
+            partes.append(f"\nResultado da query (preview): {str(sql_result)}")
 
     if not contexto.strip() and not sql_query:
         partes.append(
@@ -138,9 +160,58 @@ def response_generator(
     return "\n".join(partes)
 
 
+def _dividir_documentos(contexto: str, fontes: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """
+    Divide o contexto concatenado em documentos individuais.
+
+    O contexto vem no formato:
+        conteudo_do_documento_1
+
+        ---
+
+        conteudo_do_documento_2
+
+        ---
+
+    Retorna lista de dicts com:
+        - fonte: nome do arquivo (da lista fontes, se fornecida; ou extraído do texto; ou default)
+        - conteudo: texto do documento (limitado a 350 chars para exibição)
+    """
+    # Separar por "---" como delimitador entre documentos
+    documentos = contexto.split("\n\n---\n\n")
+    resultado = []
+
+    for i, doc_texto in enumerate(documentos):
+        if not doc_texto.strip():
+            continue
+
+        # Usar fonte da lista se disponível e se houver correspondência
+        fonte = None
+        if fontes and i < len(fontes) and fontes[i]:
+            fonte = fontes[i]
+        else:
+            # Fallback: extrair do texto ou usar default
+            conteudo_limpo = doc_texto.replace("\n", " ").strip()
+            fonte_match = re.search(r"^\s*Fonte:\s*(.+?)(?:\.|$)", conteudo_limpo, re.IGNORECASE)
+            fonte = fonte_match.group(1) if fonte_match else f"documento {i+1}"
+
+        # Limitar tamanho para exibição
+        conteudo_limpo = doc_texto.replace("\n", " ").strip()
+        if len(conteudo_limpo) > 350:
+            conteudo_limpo = conteudo_limpo[:347] + "..."
+
+        resultado.append({
+            "fonte": fonte,
+            "conteudo": conteudo_limpo,
+        })
+
+    return resultado
+
+
 # ==================================================================
 # FLUXO PRINCIPAL (duas colunas)
 # ==================================================================
+
 
 def main() -> None:
     st.set_page_config(
@@ -201,6 +272,7 @@ def main() -> None:
 # BACKEND
 # ==================================================================
 
+
 def state_rag(cfg: Dict[str, Any]) -> Optional[StreamlitRAGStore]:
     state = st.session_state
     if state.rag is not None:
@@ -209,7 +281,7 @@ def state_rag(cfg: Dict[str, Any]) -> Optional[StreamlitRAGStore]:
         store = StreamlitRAGStore(
             index=cfg.get("index_path"),
             text_root=cfg.get("text_root"),
-            top_k=cfg.get("top_k", 3),
+            top_k=cfg.get("top_k", 10),
             show_context=cfg.get("show_context", True),
         )
     except Exception as exc:
@@ -238,7 +310,7 @@ def _adapt_extras(
     msg: Dict[str, Any],
     sql_engine: Optional[Any],
     sql_mock: bool,
-):
+) -> Dict[str, Any]:
     extras_raw = msg.get("extras") or {}
     extras = dict(extras_raw)
 
@@ -255,6 +327,7 @@ def _adapt_extras(
 # ==================================================================
 # PROCESSAMENTO
 # ==================================================================
+
 
 def processar_pedido(
     usuario: str,
@@ -425,6 +498,7 @@ def _elegivel_sql(usuario: str) -> bool:
 # ==================================================================
 # ENTRY POINT
 # ==================================================================
+
 
 if __name__ == "__main__":
     main()

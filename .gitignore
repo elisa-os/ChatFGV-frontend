@@ -19,6 +19,9 @@ env/
 # Data directories (large files)
 /disco/
 
+# Local docs (analysis notes, not for commit)
+local-docs/
+
 # LaTeX build files
 *.aux
 *.log
