@@ -43,17 +43,10 @@ def get_rag_status() -> Tuple[bool, Optional[str], Optional[str]]:
 
 class StreamlitRAGStore:
     """
-    Placeholder da classe que carrega o índice FAISS + embedding.
+    Usado pelo app. Mantido aqui por exaustao da dupla.
 
-    Em implementacao completa, o __init__ deve:
-    - carregar HuggingFaceEmbeddings(model_name=...)
-    - carregar FAISS.load_local(INDEX_PATH, embeddings, ...)
-    - guardar o vectorstore carregado
-
-    O método search(query) deve:
-    - executar vectorstore.similarity_search(query, k=top_k)
-    - extrair contexto + fontes dos documents recuperados
-    - retornar dict com: contexto, fontes, num_docs, tempo_s, top_k
+    Se futuro permitir integracao de LLM/agentes, esta classe pode ser
+    estendida para carregar o vetor index e retornar contexto real.
     """
 
     def __init__(

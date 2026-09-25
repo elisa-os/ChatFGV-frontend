@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-app.py - ChatFGV Streamlit
+app.py - ChatFGV Streamlit (layout em duas colunas)
 
-Executa a interface de chat. Requer:
+- Coluna esquerda: painel de terminal estático (log_panel.py)
+- Coluna direita: chat com histórico
+
+Requer:
 - frontend/streamlit/rag.py
 - frontend/streamlit/sql.py
 - frontend/streamlit/ui.py
 - frontend/streamlit/chat.py
+- frontend/streamlit/log_panel.py
 
-Modo de uso minimo (apenas recuperacao sem gerador final):
+Modo de uso minimo:
     streamlit run frontend/streamlit/app.py
 
 Variaveis de ambiente relevantes:
@@ -16,6 +20,7 @@ Variaveis de ambiente relevantes:
 - CHATFGV_DHBB        : caminho dos textos DHBB (padrao: ./DHBB/text)
 - CHATFGV_PG_DSN      : DSN do Postgres (se quiser banco real)
 - CHATFGV_SQL_MOCK    : "1" para usar banco mock
+- CHATFGV_LOG_PATH    : caminho do arquivo de log a monitorar
 """
 
 from __future__ import annotations
@@ -23,16 +28,10 @@ from __future__ import annotations
 import os
 import sys
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-# ------------------------------------------------------------------
-# PATH: garantir que o diretório dos modulos esteja importavel
-# O app deve rodar a partir de qualquer cwd, entao forca o caminho
-# do arquivo atual para que os imports locais (rag, sql, ui, chat)
-# funcionem.
-# ------------------------------------------------------------------
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 if HERE not in sys.path:
@@ -40,25 +39,21 @@ if HERE not in sys.path:
 
 from rag import (
     StreamlitRAGStore,
-    get_rag_status,
 )
 from sql import (
     get_sql_engine,
     list_tables,
     run_query,
-    describe_schema_tables,
 )
 
 from ui import (
-    sidebar_config,
-    show_db_status,
     render_message,
     render_status_erro,
 )
 from chat import (
-    init_chat_state,
     add_message,
 )
+from log_panel import log_panel
 
 
 # ==================================================================
@@ -87,15 +82,16 @@ def init_state() -> None:
     if "show_context" not in state:
         state.show_context = True
     if "config" not in state:
-        state.config = {}
+        state.config = {
+            "modo": "Auto",
+            "top_k": 3,
+            "sql_mock": True,
+            "show_context": True,
+        }
 
 
 # ==================================================================
 # GERADOR DE RESPOSTA (placeholder)
-# ==================================================================
-# Esta versao ainda nao tem LLM integrado. A funcao response_generator
-# deve ser preenchida pela dupla para gerar resposta a partir do
-# contexto recuperado (DHBB) e/ou resultado SQL.
 # ==================================================================
 
 def response_generator(
@@ -105,54 +101,45 @@ def response_generator(
     sql_query: Optional[str] = None,
     sql_result: Optional[Any] = None,
 ) -> str:
-    """
-    Placeholder: retorna o que foi recuperado a ser completado com
-    gerador de linguagem natural (Copilot/LLM/ API).
-
-    Hoje: resume o que foi recuperado, lista fontes e, se houver,
-    mostra query + resultado.
-    """
-    parts = []
-    parts.append(f"Pergunta: {usuario}")
+    partes = [f"Pergunta: {usuario}"]
 
     if contexto.strip():
-        partes_c = [p for p in contexto.split("\n") if p.strip()]
-        if partes_c:
-            partes_c_short = partes_c[:3]
-            parts.append("\nContexto recuperado (resumo):")
-            for p in partes_c_short:
-                parts.append("- " + p[:3000])
-            if len(partes_c) > 3:
-                parts.append(
-                    f"... ({len(partes_c)} verbetes recuperados no total)"
+        linhas = [p for p in contexto.split("\n") if p.strip()]
+        if linhas:
+            partes.append("\nContexto recuperado (resumo):")
+            for p in linhas[:3]:
+                partes.append("- " + p[:3000])
+            if len(linhas) > 3:
+                partes.append(
+                    f"... ({len(linhas)} verbetes recuperados no total)"
                 )
         else:
-            parts.append("Contexto recuperado: (nenhum verrete encontrado)")
+            partes.append("Contexto recuperado: (nenhum verrete encontrado)")
 
     if fontes:
-        parts.append("\nFontes DHBB: " + ", ".join(fontes))
+        partes.append("\nFontes DHBB: " + ", ".join(fontes))
 
     if sql_query:
-        parts.append(f"\nQuery SQL gerada:\n{sql_query}")
+        partes.append(f"\nQuery SQL gerada:\n{sql_query}")
     if sql_result is not None:
-        parts.append(
-            "\nResultado da query (preview): "
-            + f"{len(sql_result)} linhas"
-            if isinstance(sql_result, list)
-            else str(sql_result)
-        )
+        if isinstance(sql_result, list):
+            partes.append(
+                "\nResultado da query (preview): " + f"{len(sql_result)} linhas"
+            )
+        else:
+            partes.append("\nResultado da query (preview): " + str(sql_result))
 
     if not contexto.strip() and not sql_query:
-        parts.append(
+        partes.append(
             "\nNão encontrei informação no DHBB nem no banco estruturado "
             "para esta pergunta. Tente reformular ou escolher outro modo."
         )
 
-    return "\n".join(parts)
+    return "\n".join(partes)
 
 
 # ==================================================================
-# FLUXO PRINCIPAL
+# FLUXO PRINCIPAL (duas colunas)
 # ==================================================================
 
 def main() -> None:
@@ -161,69 +148,69 @@ def main() -> None:
         page_icon=":speech_balloon:",
         layout="wide",
     )
-    st.title("ChatFGV")
-    st.caption(
-        "Interface de pergunta sobre bases publicas brasileiras (DHBB + SQL)"
-    )
 
     init_state()
-    cfg = sidebar_config()
-    st.session_state.config = cfg
-    st.session_state.show_context = cfg["show_context"]
 
-    # Estado do backend (somente leitura na sidebar)
-    faiss_ok, index_path, dhbb_path = get_rag_status()
-    show_db_status(faiss_ok, False, cfg["sql_mock"])
+    # Backend SQL sob demanda
+    sql_engine = state_sql(st.session_state.config)
 
-    # Carregar backend sob demanda
-    rag = state_rag(cfg)
-    sql_engine = state_sql(cfg)
+    # Container com duas colunas
+    col_e, col_d = st.columns([1, 2], gap="medium")
 
-    if cfg["sql_mock"] and sql_engine is not None:
-        with st.sidebar:
-            st.code(
-                "Tabelas mock:\n" + "\n".join(list_tables(sql_engine)),
-                language="text",
-            )
+    with col_e:
+        log_panel()
 
-    # Renderizar historico
-    for msg in st.session_state.messages:
-        extras_ = _adapt_extras(msg, cfg, sql_engine, cfg["sql_mock"])
-        render_message(msg["role"], msg["content"], extras_)
-
-    # Entrada do usuario
-    if usuario := st.chat_input("Digite sua pergunta..."):
-        add_message("user", usuario)
-        st.chat_message("user").markdown(usuario)
-
-        start = time.time()
-        resposta, extras = processar_pedido(
-            usuario=usuario,
-            cfg=cfg,
-            rag=rag,
-            sql_engine=sql_engine,
+    with col_d:
+        st.title("ChatFGV")
+        st.caption(
+            "Interface de pergunta sobre bases publicas brasileiras "
+            "(DHBB + SQL)"
         )
-        elapsed = round(time.time() - start, 2)
 
-        add_message("assistant", resposta, extras)
-        render_message("assistant", resposta, extras)
-        st.caption(f" Tempo de resposta: {elapsed}s")
+        if st.session_state.config["sql_mock"] and sql_engine is not None:
+            with st.expander("Tabelas disponiveis (mock)"):
+                st.code(
+                    "Tabelas mock:\n" + "\n".join(list_tables(sql_engine)),
+                    language="text",
+                )
 
+        # Historico
+        for msg in st.session_state.messages:
+            extras_ = _adapt_extras(msg, sql_engine, st.session_state.config["sql_mock"])
+            render_message(msg["role"], msg["content"], extras_)
+
+        # Input do usuario
+        if usuario := st.chat_input("Digite sua pergunta..."):
+            add_message("user", usuario)
+            st.chat_message("user").markdown(usuario)
+
+            start = time.time()
+            resposta, extras = processar_pedido(
+                usuario=usuario,
+                rag=state_rag(st.session_state.config),
+                sql_engine=sql_engine,
+            )
+            elapsed = round(time.time() - start, 2)
+
+            add_message("assistant", resposta, extras)
+            render_message("assistant", resposta, extras)
+            st.caption(f" Tempo de resposta: {elapsed}s")
+
+
+# ==================================================================
+# BACKEND
+# ==================================================================
 
 def state_rag(cfg: Dict[str, Any]) -> Optional[StreamlitRAGStore]:
     state = st.session_state
     if state.rag is not None:
         return state.rag
-    faiss_ok, index_path, dhbb_path = get_rag_status()
-    if not faiss_ok:
-        state.rag = None
-        return None
     try:
         store = StreamlitRAGStore(
-            index=index_path,
-            text_root=dhbb_path,
-            top_k=cfg["top_k"],
-            show_context=cfg["show_context"],
+            index=cfg.get("index_path"),
+            text_root=cfg.get("text_root"),
+            top_k=cfg.get("top_k", 3),
+            show_context=cfg.get("show_context", True),
         )
     except Exception as exc:
         state.rag = None
@@ -238,7 +225,7 @@ def state_sql(cfg: Dict[str, Any]) -> Optional[Any]:
     if state.sql_engine is not None:
         return state.sql_engine
     try:
-        engine = get_sql_engine(force_mock=cfg["sql_mock"])
+        engine = get_sql_engine(force_mock=cfg.get("sql_mock", True))
     except Exception as exc:
         render_status_erro("SQL", f"nao foi possivel conectar ao Postgres: {exc}")
         state.sql_engine = None
@@ -249,7 +236,6 @@ def state_sql(cfg: Dict[str, Any]) -> Optional[Any]:
 
 def _adapt_extras(
     msg: Dict[str, Any],
-    cfg: Dict[str, Any],
     sql_engine: Optional[Any],
     sql_mock: bool,
 ):
@@ -266,32 +252,33 @@ def _adapt_extras(
     return msg, extras
 
 
+# ==================================================================
+# PROCESSAMENTO
+# ==================================================================
+
 def processar_pedido(
     usuario: str,
-    cfg: Dict[str, Any],
     rag: Optional[StreamlitRAGStore],
     sql_engine: Optional[Any],
 ) -> tuple:
-    """
-    Decide modo e orquestra recuperacao (DHBB) e/ou SQL.
-    Retorna (texto_resposta, extras).
-    """
-    modo = cfg["modo"]
-
+    """Decide modo e orquestra recuperacao (DHBB) e/ou SQL."""
     extras: Dict[str, Any] = {}
 
-    selecionar_sql = False
-    selecionar_dhbb = False
-
+    # Usa modo default se nao tiver sido configurado
+    modo = st.session_state.config.get("modo", "Auto")
     if modo == "DHBB":
         selecionar_dhbb = True
+        selecionar_sql = False
     elif modo == "SQL":
         selecionar_sql = True
+        selecionar_dhbb = False
     else:
         # Auto
         if _elegivel_sql(usuario):
             selecionar_sql = True
+            selecionar_dhbb = False
         else:
+            selecionar_sql = False
             selecionar_dhbb = True
 
     sql_query = None
@@ -300,7 +287,6 @@ def processar_pedido(
     if selecionar_sql and sql_engine is not None:
         sql_query, sql_result = gerar_sql(
             usuario=usuario,
-            cfg=cfg,
             engine=sql_engine,
         )
         if sql_query:
@@ -351,16 +337,12 @@ def processar_pedido(
 
 
 def sql_resolver_usuario(usuario: str, sql_query: str, sql_result: Any) -> tuple:
-    """
-    Monta a resposta a partir da query+resultado SQL.
-    Placeholder: em versão final, aqui entra o Agent 2 (gerador final).
-    """
+    """Monta a resposta a partir da query+resultado SQL."""
     extras: Dict[str, Any] = {
         "sql_query": sql_query,
         "sql_result": sql_result,
     }
 
-    n_rows = len(sql_result) if isinstance(sql_result, list) else 0
     response = response_generator(
         usuario=usuario,
         contexto="",
@@ -371,23 +353,13 @@ def sql_resolver_usuario(usuario: str, sql_query: str, sql_result: Any) -> tuple
     return response, extras
 
 
-def gerar_sql(usuario: str, cfg: Dict[str, Any], engine: Any) -> tuple:
-    """
-    Agent 1 (geracao de query SQL) - placeholder.
-    Em versao final, aqui entra o LLM/agente que olha o schema e
-    produz a query. Hoje retorna (
-        query gerada por placeholder ou None,
-        resultado da query (DataFrame ou list)
-    )
-    """
+def gerar_sql(usuario: str, engine: Any) -> tuple:
+    """Agent 1 (geracao de query SQL) - placeholder."""
     try:
         tables = list_tables(engine)
-        schema_desc = describe_schema_tables(tables)
     except Exception:
         tables = []
-        schema_desc = "n/a"
 
-    # Placeholder: montamos uma query de exemplo baseada em palavras chave.
     query = _placeholder_sql_from_keywords(usuario, tables)
     if query is None:
         return None, None
@@ -408,10 +380,7 @@ def gerar_sql(usuario: str, cfg: Dict[str, Any], engine: Any) -> tuple:
 
 
 def _placeholder_sql_from_keywords(usuario: str, tables: List[str]) -> Optional[str]:
-    """
-    Placeholder to produce a SQL query based on keywords.
-    Saves implementation effort before integrating Agent 1 (LLM).
-    """
+    """Placeholder to produce a SQL query based on keywords."""
     n = usuario.lower()
     for tbl in tables:
         if "acidentes_transito" in tbl:
@@ -433,10 +402,7 @@ def _placeholder_sql_from_keywords(usuario: str, tables: List[str]) -> Optional[
 
 
 def _elegivel_sql(usuario: str) -> bool:
-    """
-    Heuristica simples para decidir se a pergunta parece ser sobre dados
-    estruturados (SQL) ou biografica/historica (DHBB).
-    """
+    """Heuristica simples para decidir se a pergunta parece ser sobre SQL."""
     n = usuario.lower()
     sql_signals = [
         "acidente", "transito", "censo", "populacao", "habitante",
