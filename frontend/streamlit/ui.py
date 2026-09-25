@@ -106,6 +106,8 @@ def render_message(role: str, content: str, extras: Optional[Dict[str, Any]] = N
 
 
 def _render_extras(extras: Dict[str, Any]) -> None:
+    if not isinstance(extras, dict):
+        extras = {}
     fonte = extras.get("fonte") or extras.get("fontes")
     if fonte:
         if isinstance(fonte, list):

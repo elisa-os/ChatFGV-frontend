@@ -88,7 +88,7 @@ def log_panel(
 def _render_log_content(*, path: str, lines_qty: int) -> None:
     """Lê o arquivo de log e renderiza as últimas `lines_qty` linhas."""
     if not os.path.isfile(path):
-        st.warning(f"Arquivo de log nao encontrado: {path}")
+        st.caption("Sem log disponível.")
         return
 
     try:
