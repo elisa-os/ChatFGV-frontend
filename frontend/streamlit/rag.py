@@ -16,6 +16,7 @@ Dependências: scikit-learn, PyYAML (ambos já estão nas dependências do proje
 from __future__ import annotations
 
 import glob
+import logging
 import os
 import re
 import time
@@ -24,6 +25,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------
@@ -91,7 +94,7 @@ def _carregar_corpus():
         return
 
     t0 = time.time()
-    print(f"[RAG] Carregando corpus DHBB de {DHBB_PATH}...", flush=True)
+    logger.info(f"[RAG] Carregando corpus DHBB de {DHBB_PATH}...")
 
     try:
         # Encontrar todos os arquivos .text
@@ -102,7 +105,7 @@ def _carregar_corpus():
                 f"Verifique se CHATFGV_DHBB está configurado corretamente."
             )
 
-        print(f"[RAG] Encontrados {len(text_files)} verbetes. Lendo...", flush=True)
+        logger.info(f"[RAG] Encontrados {len(text_files)} verbetes. Lendo...")
 
         docs_content = []
         _corpus_docs = []
@@ -112,7 +115,7 @@ def _carregar_corpus():
                 with open(file_path, "r", encoding="utf-8") as f:
                     raw_content = f.read()
             except Exception as exc:
-                print(f"[RAG] Aviso: erro ao ler {file_path}: {exc}", flush=True)
+                logger.warning(f"[RAG] Aviso: erro ao ler {file_path}: {exc}")
                 continue
 
             # Limpar texto e extrair metadados
@@ -131,7 +134,7 @@ def _carregar_corpus():
         if not docs_content:
             raise ValueError("Nenhum documento válido pôde ser lido.")
 
-        print(f"[RAG] {len(docs_content)} documentos carregados. Construindo TF-IDF...", flush=True)
+        logger.info(f"[RAG] {len(docs_content)} documentos carregados. Construindo TF-IDF...")
 
         # Construir vetorizador TF-IDF e transformar corpus
         _vectorizer = TfidfVectorizer(
@@ -147,16 +150,15 @@ def _carregar_corpus():
 
         _corpus_ready = True
         elapsed = time.time() - t0
-        print(
+        logger.info(
             f"[RAG] Corpus pronto: {len(docs_content)} docs, "
             f"{_corpus_tfidf.shape[1]} features TF-IDF, "
-            f"{elapsed:.1f}s",
-            flush=True,
+            f"{elapsed:.1f}s"
         )
 
     except Exception as exc:
         _corpus_error = f"Falha ao carregar corpus: {exc}"
-        print(f"[RAG] ERRO: {_corpus_error}", flush=True)
+        logger.error(f"[RAG] ERRO: {_corpus_error}")
 
 
 def _buscar_similarity_search(query: str, top_k: int = 2) -> Tuple[str, List[str], int]:

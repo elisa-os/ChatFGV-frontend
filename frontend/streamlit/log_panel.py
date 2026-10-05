@@ -2,11 +2,10 @@
 """
 log_panel.py - Painel de terminal + estado do backend (ChatFGV Streamlit)
 
-- Coluna esquerda: terminal log estático (sem autorefresh) + estado resumido
+- Coluna esquerda: terminal log com auto-refresh (a cada 5s) + estado resumido
   do backend (FAISS / SQL mock / Postgres).
 - O chat fica na coluna direita.
-- Não há auto-refresh: o log só muda quando a página é recarregada (manual)
-  ou quando o Streamlit reexecuta por interação do usuário.
+- Auto-refresh funciona via st.fragment(run_every=5) com st.empty().
 - Configurações não são visíveis, usa defaults: modo=Auto, mock=True, top_k=3,
   show_context=True.
 """
@@ -23,9 +22,10 @@ import streamlit as st
 # CONFIGURACAO DO PAINEL DE LOG
 # ==================================================================
 
-LOG_LINES_MAX = 150
+LOG_LINES_MAX = 50
 LOG_LINES_MIN = 20
 LOG_LINES_MAX_INPUT = 500
+LOG_HEIGHT = 500
 
 # Caminho padrão do log do Streamlit (relativo ao repo da dupla).
 _DEFAULT_LOG_PATH = os.path.abspath(
@@ -69,7 +69,7 @@ def log_panel(
 
     st.title("Terminal")
     st.caption(f"Monitorando: {path}")
-    st.caption("Log estático — recarregue a página para atualizar.")
+    st.caption("Log em tempo real — atualiza automaticamente a cada 5 segundos")
 
     st.markdown("---")
 
@@ -86,10 +86,12 @@ def log_panel(
 
 
 def _render_log_content(*, path: str, lines_qty: int) -> None:
-    """Lê o arquivo de log e renderiza as últimas `lines_qty` linhas."""
+    """Lê o arquivo de log e renderiza as últimas `lines_qty` linhas em um text_area com scroll."""
     if not os.path.isfile(path):
         st.caption("Sem log disponível.")
         return
+
+    placeholder = st.empty()
 
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -103,6 +105,33 @@ def _render_log_content(*, path: str, lines_qty: int) -> None:
         return
 
     selecionadas = linhas[-max(lines_qty, 1):]
-    texto = "".join(selecionadas)
+    texto = "".join(selecionadas).rstrip()
 
-    st.code(texto, language="text", line_numbers=True)
+    with placeholder.container():
+        text_area_key = f"log_content_{id(texto)}"
+        st.text_area(
+            "Logs:",
+            value=texto,
+            height=LOG_HEIGHT,
+            disabled=True,
+            key=text_area_key
+        )
+
+        # Script para forçar scroll pro final
+        st.markdown(
+            """
+            <script>
+            function scrollLogToBottom() {
+                const textareas = document.querySelectorAll('textarea');
+                textareas.forEach(textarea => {
+                    if (textarea.value && textarea.disabled) {
+                        textarea.scrollTop = textarea.scrollHeight;
+                    }
+                });
+            }
+            setTimeout(scrollLogToBottom, 100);
+            window.addEventListener('load', scrollLogToBottom);
+            </script>
+            """,
+            unsafe_allow_html=True
+        )

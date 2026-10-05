@@ -30,6 +30,7 @@ MODIFICACOES RECENTES:
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sys
@@ -60,6 +61,31 @@ from chat import (
     add_message,
 )
 from log_panel import log_panel
+
+
+# ==================================================================
+# CONFIGURACAO DE LOGGING
+# ==================================================================
+
+
+def _setup_logging() -> None:
+    """Configura logging para escrever em streamlit.log."""
+    log_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "streamlit.log")
+    )
+
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    if not logger.handlers:
+        handler = logging.FileHandler(log_path, encoding="utf-8")
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
 
 
 # ==================================================================
@@ -214,6 +240,8 @@ def _dividir_documentos(contexto: str, fontes: Optional[List[str]] = None) -> Li
 
 
 def main() -> None:
+    _setup_logging()
+
     st.set_page_config(
         page_title="ChatFGV",
         page_icon=":speech_balloon:",
@@ -225,11 +253,17 @@ def main() -> None:
     # Backend SQL sob demanda
     sql_engine = state_sql(st.session_state.config)
 
-    # Container com duas colunas
-    col_e, col_d = st.columns([1, 2], gap="medium")
+    # Fragment isolado: auto-refresh só no terminal, sem afetar o chat
+    @st.fragment(run_every=5)
+    def terminal_fragment():
+        st.caption(f"Ultima atualizacao: {time.strftime('%H:%M:%S')}")
+        log_panel()
+
+    # Container com duas colunas - 50/50
+    col_e, col_d = st.columns([1, 1], gap="medium")
 
     with col_e:
-        log_panel()
+        terminal_fragment()
 
     with col_d:
         st.title("ChatFGV")
@@ -245,15 +279,9 @@ def main() -> None:
                     language="text",
                 )
 
-        # Historico
-        for msg in st.session_state.messages:
-            extras_ = _adapt_extras(msg, sql_engine, st.session_state.config["sql_mock"])
-            render_message(msg["role"], msg["content"], extras_)
-
-        # Input do usuario
+        # Input do usuario (fixo no topo antes do container)
         if usuario := st.chat_input("Digite sua pergunta..."):
             add_message("user", usuario)
-            st.chat_message("user").markdown(usuario)
 
             start = time.time()
             resposta, extras = processar_pedido(
@@ -264,8 +292,14 @@ def main() -> None:
             elapsed = round(time.time() - start, 2)
 
             add_message("assistant", resposta, extras)
-            render_message("assistant", resposta, extras)
-            st.caption(f" Tempo de resposta: {elapsed}s")
+
+        # Container scrollável para o chat (com histórico)
+        chat_container = st.container(height=600)
+        with chat_container:
+            # Historico
+            for msg in st.session_state.messages:
+                extras_ = _adapt_extras(msg, sql_engine, st.session_state.config["sql_mock"])
+                render_message(msg["role"], msg["content"], extras_)
 
 
 # ==================================================================
